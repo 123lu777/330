@@ -44,6 +44,9 @@ parser.add_argument('--num_epochs', default=100, type=int, help='num_epochs')
 parser.add_argument('--batch_size', default=12, type=int, help='batch_size')
 parser.add_argument('--val_epochs', default=5, type=int, help='val_epochs')
 parser.add_argument('--print_epochs', default=2, type=int, help='val_epochs')
+parser.add_argument('--resume', action='store_true', help='Resume from latest checkpoint in session dir')
+parser.add_argument('--resume_path', default='', type=str, help='Resume checkpoint path, overrides --resume search')
+parser.add_argument('--pretrain_path', default='', type=str, help='Pretrained checkpoint path')
 args = parser.parse_args()
 
 dataset = args.dataset
@@ -91,27 +94,34 @@ warmup_epochs = -1
 scheduler_cosine = optim.lr_scheduler.CosineAnnealingLR(optimizer, num_epochs-warmup_epochs, eta_min=end_lr)
 scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=warmup_epochs, after_scheduler=scheduler_cosine)
 
-RESUME = False
-Pretrain = False
-model_pre_dir = ''
+best_psnr = 0
+best_epoch = 0
+iter = 0
 ######### Pretrain ###########
-if Pretrain:
-    utils.load_checkpoint(model_restoration, model_pre_dir)
+if args.pretrain_path:
+    utils.load_checkpoint(model_restoration, args.pretrain_path)
 
     print('------------------------------------------------------------------------------')
-    print("==> Retrain Training with: " + model_pre_dir)
+    print("==> Retrain Training with: " + args.pretrain_path)
     print('------------------------------------------------------------------------------')
 
 ######### Resume ###########
-if RESUME:
-    path_chk_rest = utils.get_last_path(model_dir, '_latest.pth')
+if args.resume or args.resume_path:
+    path_chk_rest = args.resume_path if args.resume_path else utils.get_last_path(model_dir, '_latest.pth')
+    chk_rest = torch.load(path_chk_rest)
     utils.load_checkpoint(model_restoration,path_chk_rest)
     start_epoch = utils.load_start_epoch(path_chk_rest) + 1
     utils.load_optim(optimizer, path_chk_rest)
+    best_psnr = chk_rest.get('best_psnr', 0)
+    best_epoch = chk_rest.get('best_epoch', 0)
+    iter = chk_rest.get('iter', 0)
 
-    for i in range(1, start_epoch):
-        scheduler.step()
-    new_lr = scheduler.get_lr()[0]
+    if 'scheduler' in chk_rest:
+        scheduler.load_state_dict(chk_rest['scheduler'])
+    else:
+        for i in range(1, start_epoch):
+            scheduler.step()
+    new_lr = optimizer.param_groups[0]['lr']
     print('------------------------------------------------------------------------------')
     print("==> Resuming Training with learning rate:", new_lr)
     print('------------------------------------------------------------------------------')
@@ -136,11 +146,6 @@ print('===> Loading datasets')
 with open(log_dir,"a+") as f:
     f.write('===> Start Epoch {} End Epoch {} \n'.format(start_epoch, num_epochs + 1))
     f.write('===> Loading datasets\n')
-
-
-best_psnr = 0
-best_epoch = 0
-iter = 0
 
 for epoch in range(start_epoch, num_epochs + 1):
     epoch_start_time = time.time()
@@ -197,7 +202,11 @@ for epoch in range(start_epoch, num_epochs + 1):
             best_epoch = epoch
             torch.save({'epoch': epoch, 
                         'state_dict': model_restoration.state_dict(),
-                        'optimizer' : optimizer.state_dict()
+                        'optimizer' : optimizer.state_dict(),
+                        'scheduler': scheduler.state_dict(),
+                        'best_psnr': best_psnr,
+                        'best_epoch': best_epoch,
+                        'iter': iter
                         }, os.path.join(model_dir,"model_best.pth"))
 
         print("[epoch %d PSNR: %.4f --- best_epoch %d Best_PSNR %.4f]" % (epoch, psnr_val_rgb, best_epoch, best_psnr))
@@ -205,7 +214,11 @@ for epoch in range(start_epoch, num_epochs + 1):
             f.write("[epoch %d PSNR: %.4f --- best_epoch %d Best_PSNR %.4f] \n" % (epoch, psnr_val_rgb, best_epoch, best_psnr))
         torch.save({'epoch': epoch, 
                     'state_dict': model_restoration.state_dict(),
-                    'optimizer' : optimizer.state_dict()
+                    'optimizer' : optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
+                    'best_psnr': best_psnr,
+                    'best_epoch': best_epoch,
+                    'iter': iter
                     }, os.path.join(model_dir,f"model_epoch_{epoch}.pth")) 
 
     scheduler.step()
@@ -220,5 +233,9 @@ for epoch in range(start_epoch, num_epochs + 1):
 
     torch.save({'epoch': epoch, 
                 'state_dict': model_restoration.state_dict(),
-                'optimizer' : optimizer.state_dict()
+                'optimizer' : optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'best_psnr': best_psnr,
+                'best_epoch': best_epoch,
+                'iter': iter
                 }, os.path.join(model_dir,"model_latest.pth")) 
