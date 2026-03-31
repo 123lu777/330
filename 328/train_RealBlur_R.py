@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 import random
 import time
 import numpy as np
+from collections import OrderedDict
 
 import utils
 from data.data_RGB import get_training_data, get_validation_data
@@ -96,7 +97,7 @@ scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=warmup_e
 
 best_psnr = 0
 best_epoch = 0
-iter = 0
+current_iter = 0
 ######### Pretrain ###########
 if args.pretrain_path:
     utils.load_checkpoint(model_restoration, args.pretrain_path)
@@ -109,12 +110,20 @@ if args.pretrain_path:
 if args.resume or args.resume_path:
     path_chk_rest = args.resume_path if args.resume_path else utils.get_last_path(model_dir, '_latest.pth')
     chk_rest = torch.load(path_chk_rest)
-    utils.load_checkpoint(model_restoration,path_chk_rest)
+    resume_state_dict = chk_rest['state_dict']
+    try:
+        model_restoration.load_state_dict(resume_state_dict)
+    except RuntimeError:
+        new_state_dict = OrderedDict()
+        for k, v in resume_state_dict.items():
+            name = k[len('module.'):] if k.startswith('module.') else k
+            new_state_dict[name] = v
+        model_restoration.load_state_dict(new_state_dict)
     start_epoch = utils.load_start_epoch(path_chk_rest) + 1
     utils.load_optim(optimizer, path_chk_rest)
     best_psnr = chk_rest.get('best_psnr', 0)
     best_epoch = chk_rest.get('best_epoch', 0)
-    iter = chk_rest.get('iter', 0)
+    current_iter = chk_rest.get('current_iter', 0)
 
     if 'scheduler' in chk_rest:
         scheduler.load_state_dict(chk_rest['scheduler'])
@@ -173,12 +182,12 @@ for epoch in range(start_epoch, num_epochs + 1):
         loss.backward()
         optimizer.step()
         epoch_loss +=loss.item()
-        iter += 1
+        current_iter += 1
         print('epoch', epoch)
-        print('loss/fft_loss', loss_fft, iter)
-        print('loss/char_loss', loss_char, iter)
-        print('loss/edge_loss', loss_edge, iter)
-        print('loss/iter_loss', loss, iter)
+        print('loss/fft_loss', loss_fft, current_iter)
+        print('loss/char_loss', loss_char, current_iter)
+        print('loss/edge_loss', loss_edge, current_iter)
+        print('loss/iter_loss', loss, current_iter)
     if epoch % print_epochs == 0:
         print('loss/epoch_loss', epoch_loss, epoch)
     #### Evaluation ####
@@ -206,7 +215,7 @@ for epoch in range(start_epoch, num_epochs + 1):
                         'scheduler': scheduler.state_dict(),
                         'best_psnr': best_psnr,
                         'best_epoch': best_epoch,
-                        'iter': iter
+                        'current_iter': current_iter
                         }, os.path.join(model_dir,"model_best.pth"))
 
         print("[epoch %d PSNR: %.4f --- best_epoch %d Best_PSNR %.4f]" % (epoch, psnr_val_rgb, best_epoch, best_psnr))
@@ -218,7 +227,7 @@ for epoch in range(start_epoch, num_epochs + 1):
                     'scheduler': scheduler.state_dict(),
                     'best_psnr': best_psnr,
                     'best_epoch': best_epoch,
-                    'iter': iter
+                    'current_iter': current_iter
                     }, os.path.join(model_dir,f"model_epoch_{epoch}.pth")) 
 
     scheduler.step()
@@ -237,5 +246,5 @@ for epoch in range(start_epoch, num_epochs + 1):
                 'scheduler': scheduler.state_dict(),
                 'best_psnr': best_psnr,
                 'best_epoch': best_epoch,
-                'iter': iter
+                'current_iter': current_iter
                 }, os.path.join(model_dir,"model_latest.pth")) 
