@@ -21,16 +21,13 @@ class RealDeblurDataset(Dataset):
         self.is_train = is_train
         self.samples = []
 
-        with open(meta_file, "r", encoding="utf-8") as f:
+        with open(meta_file, "r") as f:
             for line in f.readlines():
                 parts = line.strip().split()
                 if len(parts) >= 2:
                     blur_path = parts[0] if os.path.isabs(parts[0]) else os.path.join(data_dir, parts[0])
                     sharp_path = parts[1] if os.path.isabs(parts[1]) else os.path.join(data_dir, parts[1])
                     self.samples.append((blur_path, sharp_path))
-
-        if not self.samples:
-            raise ValueError(f"No valid image pairs found in meta file: {meta_file}")
 
         print(f"Successfully loaded {len(self.samples)} image pairs from {meta_file}")
 
@@ -148,8 +145,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kinematic_weights", type=str, required=True, help="Path to kinematic expert weights")
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--image_size", type=int, default=256)
-    parser.add_argument("--data_dir", type=str, required=True, help="Dataset root directory")
-    parser.add_argument("--meta_file", type=str, required=True, help="Txt file with blur/sharp pair paths")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -172,8 +167,8 @@ def main() -> None:
     ).to(device)
 
     dataset = RealDeblurDataset(
-        data_dir=args.data_dir,
-        meta_file=args.meta_file,
+        data_dir="/media/JYJ/新加卷/ZJL/FanBlade_Dataset_MultiOmega",
+        meta_file="/media/JYJ/新加卷/ZJL/FanBlade_Dataset_MultiOmega/fan_blade_train_list.txt",
         image_size=args.image_size,
         is_train=True,
     )
