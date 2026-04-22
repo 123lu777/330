@@ -294,7 +294,13 @@ class MISCKernelNet_Deform(nn.Module):
             BasicConv(base_channel * 2, kernel_size ** 2, kernel_size=3, relu=False, stride=1),
         ])
 
-    def forward(self, x):
+    def forward(self, x, return_flows=False):
+        """
+        Args:
+            x: Input blurry image tensor [B, 3, H, W].
+            return_flows: When True, also returns a list of multi-scale flow priors
+                [s1, s2, s3] (fine-to-coarse, each shape [B, 2, h, w]).
+        """
 
         x_2 = F.interpolate(x, scale_factor=0.5)
         x_4 = F.interpolate(x_2, scale_factor=0.5)
@@ -457,8 +463,14 @@ class MISCKernelNet_Deform(nn.Module):
             Kernal_Loss += loss_s1_Alpha
             Kernal_Loss += loss_s1_Beta
 
+            if return_flows:
+                flow_priors = [s1_kernal_flow, s2_kernal_flow, s3_kernal_flow]
+                return outputs[::-1], outputs_fil[::-1], flow_priors
             return outputs[::-1], outputs_fil[::-1]
         else:
+            if return_flows:
+                flow_priors = [s1_kernal_flow, s2_kernal_flow, s3_kernal_flow]
+                return out, flow_priors
             return out
 
 
