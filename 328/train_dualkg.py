@@ -24,11 +24,20 @@ class DummyDeblurDataset(Dataset):
 
 
 def normalize_to_neg_one_to_one(x: torch.Tensor) -> torch.Tensor:
-    x_min = x.detach().amin()
-    x_max = x.detach().amax()
-    if x_min >= 0.0 and x_max <= 1.0:
-        return x * 2.0 - 1.0
-    return torch.clamp(x, -1.0, 1.0)
+    if x.ndim <= 1:
+        x_min = x.detach().amin()
+        x_max = x.detach().amax()
+        if x_min >= 0.0 and x_max <= 1.0:
+            return x * 2.0 - 1.0
+        return torch.clamp(x, -1.0, 1.0)
+
+    reduce_dims = tuple(range(1, x.ndim))
+    x_min = x.detach().amin(dim=reduce_dims, keepdim=True)
+    x_max = x.detach().amax(dim=reduce_dims, keepdim=True)
+    in_zero_one = (x_min >= 0.0) & (x_max <= 1.0)
+    scaled = x * 2.0 - 1.0
+    clipped = torch.clamp(x, -1.0, 1.0)
+    return torch.where(in_zero_one, scaled, clipped)
 
 
 def build_linear_beta_schedule(

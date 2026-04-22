@@ -51,16 +51,25 @@ def _flow_at(flows: Sequence[torch.Tensor], idx: int) -> Optional[torch.Tensor]:
 
 
 def _to_neg_one_to_one(x: torch.Tensor) -> torch.Tensor:
-    x_min = x.detach().amin()
-    x_max = x.detach().amax()
-    if x_min >= 0.0 and x_max <= 1.0:
-        return x * 2.0 - 1.0
-    return torch.clamp(x, -1.0, 1.0)
+    if x.ndim <= 1:
+        x_min = x.detach().amin()
+        x_max = x.detach().amax()
+        if x_min >= 0.0 and x_max <= 1.0:
+            return x * 2.0 - 1.0
+        return torch.clamp(x, -1.0, 1.0)
+
+    reduce_dims = tuple(range(1, x.ndim))
+    x_min = x.detach().amin(dim=reduce_dims, keepdim=True)
+    x_max = x.detach().amax(dim=reduce_dims, keepdim=True)
+    in_zero_one = (x_min >= 0.0) & (x_max <= 1.0)
+    scaled = x * 2.0 - 1.0
+    clipped = torch.clamp(x, -1.0, 1.0)
+    return torch.where(in_zero_one, scaled, clipped)
 
 
 def timestep_embedding(timesteps: torch.Tensor, dim: int) -> torch.Tensor:
     if dim < 2:
-        raise ValueError("timestep embedding dimension must be >= 2 for sinusoidal positional encoding")
+        raise ValueError("timestep embedding dimension must be >= 2 to generate sinusoidal embeddings")
     half_dim = dim // 2
     exponent = -math.log(10000.0) * torch.arange(half_dim, device=timesteps.device, dtype=torch.float32)
     exponent = exponent / half_dim
@@ -242,7 +251,7 @@ class SimpleCondUNet(nn.Module):
         m = self.mid(e2, t_emb)
         m = self.mod3(m, self._resize_flow(f3, m))
 
-        low = torch.cat([m, e2], dim=1)
+        low = torch.cat([m, e2], dim=1)  # [B, 4*base_channels, H/2, W/2] = [B, 2C + 2C, ...].
         low = self.dec_low(low, t_emb)
 
         u = self.up(low)
