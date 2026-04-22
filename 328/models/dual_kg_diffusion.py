@@ -43,9 +43,11 @@ def _freeze_model(model: nn.Module) -> None:
 
 
 def timestep_embedding(timesteps: torch.Tensor, dim: int) -> torch.Tensor:
+    if dim < 2:
+        raise ValueError("timestep embedding dimension must be >= 2")
     half_dim = dim // 2
     exponent = -math.log(10000.0) * torch.arange(half_dim, device=timesteps.device, dtype=torch.float32)
-    exponent = exponent / max(half_dim - 1, 1)
+    exponent = exponent / max(half_dim, 1)
     emb = timesteps.float().unsqueeze(1) * torch.exp(exponent).unsqueeze(0)
     emb = torch.cat([emb.sin(), emb.cos()], dim=1)
     if dim % 2 == 1:
@@ -188,6 +190,10 @@ class SimpleCondUNet(nn.Module):
             return flow
         return F.interpolate(flow, size=target.shape[-2:], mode="bilinear", align_corners=False)
 
+    @staticmethod
+    def _flow_at(flows: Sequence[torch.Tensor], idx: int) -> Optional[torch.Tensor]:
+        return flows[idx] if len(flows) > idx else None
+
     def forward(
         self,
         noisy_latent: torch.Tensor,
@@ -204,9 +210,9 @@ class SimpleCondUNet(nn.Module):
         t_emb = self.time_mlp(t_emb)
 
         flows = list(flows) if flows is not None else []
-        f1 = flows[0] if len(flows) > 0 else None
-        f2 = flows[1] if len(flows) > 1 else None
-        f3 = flows[2] if len(flows) > 2 else None
+        f1 = self._flow_at(flows, 0)
+        f2 = self._flow_at(flows, 1)
+        f3 = self._flow_at(flows, 2)
 
         x = torch.cat([noisy_latent, cond_img], dim=1)
         x0 = self.input_proj(x)
@@ -260,10 +266,11 @@ class DualKGDiffusionModel(nn.Module):
         base_img, flows = self.prior_extractor(blur_img)
         cond_img = torch.cat([blur_img, base_img], dim=1)
         pred_noise = self.denoiser(noisy_latent, timestep, cond_img, flows)
+        flow_s1, flow_s2, flow_s3 = (list(flows) + [None, None, None])[:3]
         return {
             "pred_noise": pred_noise,
             "base_img": base_img,
-            "flow_s1": flows[0],
-            "flow_s2": flows[1],
-            "flow_s3": flows[2],
+            "flow_s1": flow_s1,
+            "flow_s2": flow_s2,
+            "flow_s3": flow_s3,
         }

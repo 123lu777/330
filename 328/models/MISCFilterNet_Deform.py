@@ -69,7 +69,7 @@ class SCM_Deform(nn.Module):
         )
         self.conv = BasicConv(out_plane, out_plane, kernel_size=1, stride=1, relu=False)
 
-    def forward(self, x, return_flows=False):
+    def forward(self, x):
         x = torch.cat([x, self.main(x)], dim=1)
         return self.conv(x)
 
@@ -295,6 +295,12 @@ class MISCKernelNet_Deform(nn.Module):
         ])
 
     def forward(self, x, return_flows=False):
+        """
+        Args:
+            x: Input blurry image tensor [B, 3, H, W].
+            return_flows: When True, also returns a list of multi-scale flow priors
+                [s1, s2, s3] (fine-to-coarse, each shape [B, 2, h, w]).
+        """
 
         x_2 = F.interpolate(x, scale_factor=0.5)
         x_4 = F.interpolate(x_2, scale_factor=0.5)

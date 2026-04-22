@@ -52,11 +52,11 @@ def train_one_step(
     blur = batch["blur"].to(device)
     sharp = batch["sharp"].to(device)
 
-    t = torch.randint(0, num_timesteps, (blur.size(0),), device=device)
+    timesteps = torch.randint(0, num_timesteps, (blur.size(0),), device=device)
     noise = torch.randn_like(sharp)
-    noisy_latent = q_sample(sharp, t, alpha_bars, noise)
+    noisy_latent = q_sample(sharp, timesteps, alpha_bars, noise)
 
-    out = model(blur_img=blur, noisy_latent=noisy_latent, timestep=t)
+    out = model(blur_img=blur, noisy_latent=noisy_latent, timestep=timesteps)
     pred_noise = out["pred_noise"]
     loss_noise = F.mse_loss(pred_noise, noise)
     loss_base = F.l1_loss(out["base_img"], sharp)
@@ -74,7 +74,7 @@ def train_one_step(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser("Dual-Expert Guided Diffusion training scaffold")
+    parser = argparse.ArgumentParser(description="Dual-Expert Guided Diffusion training scaffold")
     parser.add_argument("--general_weights", type=str, required=True, help="Path to GoPro-trained expert weights")
     parser.add_argument("--kinematic_weights", type=str, required=True, help="Path to kinematic expert weights")
     parser.add_argument("--batch_size", type=int, default=2)
