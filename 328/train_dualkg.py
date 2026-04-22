@@ -23,6 +23,14 @@ class DummyDeblurDataset(Dataset):
         return {"blur": blur, "sharp": sharp}
 
 
+def normalize_to_neg_one_to_one(x: torch.Tensor) -> torch.Tensor:
+    x_min = x.detach().amin()
+    x_max = x.detach().amax()
+    if x_min >= 0.0 and x_max <= 1.0:
+        return x * 2.0 - 1.0
+    return torch.clamp(x, -1.0, 1.0)
+
+
 def build_linear_beta_schedule(
     timesteps: int,
     beta_start: float = 1e-4,
@@ -49,8 +57,8 @@ def train_one_step(
     num_timesteps: int,
     device: torch.device,
 ) -> Dict[str, float]:
-    blur = batch["blur"].to(device)
-    sharp = batch["sharp"].to(device)
+    blur = normalize_to_neg_one_to_one(batch["blur"].to(device))
+    sharp = normalize_to_neg_one_to_one(batch["sharp"].to(device))
 
     sampled_timesteps = torch.randint(0, num_timesteps, (blur.size(0),), device=device)
     noise = torch.randn_like(sharp)
@@ -59,8 +67,7 @@ def train_one_step(
     out = model(blur_img=blur, noisy_latent=noisy_latent, timestep=sampled_timesteps)
     pred_noise = out["pred_noise"]
     loss_noise = F.mse_loss(pred_noise, noise)
-    loss_base = F.l1_loss(out["base_img"], sharp)
-    loss = loss_noise + 0.1 * loss_base
+    loss = loss_noise
 
     optimizer.zero_grad()
     loss.backward()
@@ -69,7 +76,6 @@ def train_one_step(
     return {
         "loss": loss.item(),
         "loss_noise": loss_noise.item(),
-        "loss_base": loss_base.item(),
     }
 
 
@@ -126,8 +132,7 @@ def main() -> None:
             print(
                 f"[epoch {epoch + 1} step {step}] "
                 f"loss={metrics['loss']:.6f} "
-                f"noise={metrics['loss_noise']:.6f} "
-                f"base={metrics['loss_base']:.6f}"
+                f"noise={metrics['loss_noise']:.6f}"
             )
 
 

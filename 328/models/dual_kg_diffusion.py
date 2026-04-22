@@ -50,6 +50,14 @@ def _flow_at(flows: Sequence[torch.Tensor], idx: int) -> Optional[torch.Tensor]:
     return flows[idx] if len(flows) > idx else None
 
 
+def _to_neg_one_to_one(x: torch.Tensor) -> torch.Tensor:
+    x_min = x.detach().amin()
+    x_max = x.detach().amax()
+    if x_min >= 0.0 and x_max <= 1.0:
+        return x * 2.0 - 1.0
+    return torch.clamp(x, -1.0, 1.0)
+
+
 def timestep_embedding(timesteps: torch.Tensor, dim: int) -> torch.Tensor:
     if dim < 2:
         raise ValueError("timestep embedding dimension must be >= 2 for sinusoidal positional encoding")
@@ -179,12 +187,13 @@ class SimpleCondUNet(nn.Module):
         self.input_proj = nn.Conv2d(in_channels + cond_channels, base_channels, 3, padding=1)
 
         self.enc1 = ResidualTimeBlock(base_channels, base_channels, t_embed_dim)
-        self.enc2 = ResidualTimeBlock(base_channels, base_channels * 2, t_embed_dim)
+        self.enc2 = ResidualTimeBlock(base_channels * 2, base_channels * 2, t_embed_dim)
         self.mid = ResidualTimeBlock(base_channels * 2, base_channels * 2, t_embed_dim)
-        self.dec1 = ResidualTimeBlock(base_channels * 2 + base_channels, base_channels, t_embed_dim)
-        self.dec2 = ResidualTimeBlock(base_channels, base_channels, t_embed_dim)
+        self.dec_low = ResidualTimeBlock(base_channels * 4, base_channels * 2, t_embed_dim)
+        self.dec_high = ResidualTimeBlock(base_channels * 2, base_channels, t_embed_dim)
+        self.refine = ResidualTimeBlock(base_channels, base_channels, t_embed_dim)
 
-        self.down = nn.Conv2d(base_channels, base_channels, 3, stride=2, padding=1)
+        self.down = nn.Conv2d(base_channels, base_channels * 2, 3, stride=2, padding=1)
         self.up = nn.ConvTranspose2d(base_channels * 2, base_channels, 4, stride=2, padding=1)
         self.out = nn.Conv2d(base_channels, in_channels, 3, padding=1)
 
@@ -233,12 +242,15 @@ class SimpleCondUNet(nn.Module):
         m = self.mid(e2, t_emb)
         m = self.mod3(m, self._resize_flow(f3, m))
 
-        u = self.up(m)
+        low = torch.cat([m, e2], dim=1)
+        low = self.dec_low(low, t_emb)
+
+        u = self.up(low)
         if u.shape[-2:] != e1.shape[-2:]:
             u = F.interpolate(u, size=e1.shape[-2:], mode="bilinear", align_corners=False)
         u = torch.cat([u, e1], dim=1)
-        u = self.dec1(u, t_emb)
-        u = self.dec2(u, t_emb)
+        u = self.dec_high(u, t_emb)
+        u = self.refine(u, t_emb)
         return self.out(u)
 
 
@@ -270,7 +282,9 @@ class DualKGDiffusionModel(nn.Module):
         timestep: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         base_img, flows = self.prior_extractor(blur_img)
-        cond_img = torch.cat([blur_img, base_img], dim=1)
+        blur_cond = _to_neg_one_to_one(blur_img)
+        base_img = _to_neg_one_to_one(base_img)
+        cond_img = torch.cat([blur_cond, base_img], dim=1)
         pred_noise = self.denoiser(noisy_latent, timestep, cond_img, flows)
         flow_s1 = _flow_at(flows, 0)
         flow_s2 = _flow_at(flows, 1)
