@@ -33,7 +33,11 @@ def _load_expert_weights(model: nn.Module, weights_path: str, device: torch.devi
     elif (not model_is_dp) and has_module:
         state_dict = _strip_module_prefix(state_dict)
 
-    model.load_state_dict(state_dict, strict=False)
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if missing:
+        print(f"[DualKG] Missing keys while loading {weights_path}: {len(missing)}")
+    if unexpected:
+        print(f"[DualKG] Unexpected keys while loading {weights_path}: {len(unexpected)}")
 
 
 def _freeze_model(model: nn.Module) -> None:
@@ -42,12 +46,16 @@ def _freeze_model(model: nn.Module) -> None:
         p.requires_grad = False
 
 
+def _flow_at(flows: Sequence[torch.Tensor], idx: int) -> Optional[torch.Tensor]:
+    return flows[idx] if len(flows) > idx else None
+
+
 def timestep_embedding(timesteps: torch.Tensor, dim: int) -> torch.Tensor:
     if dim < 2:
-        raise ValueError("timestep embedding dimension must be >= 2")
+        raise ValueError("timestep embedding dimension must be >= 2 for sinusoidal positional encoding")
     half_dim = dim // 2
     exponent = -math.log(10000.0) * torch.arange(half_dim, device=timesteps.device, dtype=torch.float32)
-    exponent = exponent / max(half_dim, 1)
+    exponent = exponent / half_dim
     emb = timesteps.float().unsqueeze(1) * torch.exp(exponent).unsqueeze(0)
     emb = torch.cat([emb.sin(), emb.cos()], dim=1)
     if dim % 2 == 1:
@@ -93,7 +101,7 @@ class PriorExtractor(nn.Module):
                 return first
             if isinstance(first, (tuple, list)) and len(first) > 0 and torch.is_tensor(first[0]):
                 return first[0]
-        raise TypeError("Unsupported expert output format")
+        raise TypeError("Unsupported expert output format: expected Tensor or tuple/list with Tensor output")
 
     @torch.no_grad()
     def forward(self, blur_img: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
@@ -106,7 +114,9 @@ class PriorExtractor(nn.Module):
         elif isinstance(kinematic_out, (tuple, list)) and len(kinematic_out) == 2:
             _, flows = kinematic_out
         else:
-            raise TypeError("Unsupported kinematic expert output format")
+            raise TypeError(
+                "Unsupported kinematic expert output format: expected tuple/list with flows (length 2 or 3)"
+            )
 
         return base_img, flows
 
@@ -190,10 +200,6 @@ class SimpleCondUNet(nn.Module):
             return flow
         return F.interpolate(flow, size=target.shape[-2:], mode="bilinear", align_corners=False)
 
-    @staticmethod
-    def _flow_at(flows: Sequence[torch.Tensor], idx: int) -> Optional[torch.Tensor]:
-        return flows[idx] if len(flows) > idx else None
-
     def forward(
         self,
         noisy_latent: torch.Tensor,
@@ -210,9 +216,9 @@ class SimpleCondUNet(nn.Module):
         t_emb = self.time_mlp(t_emb)
 
         flows = list(flows) if flows is not None else []
-        f1 = self._flow_at(flows, 0)
-        f2 = self._flow_at(flows, 1)
-        f3 = self._flow_at(flows, 2)
+        f1 = _flow_at(flows, 0)
+        f2 = _flow_at(flows, 1)
+        f3 = _flow_at(flows, 2)
 
         x = torch.cat([noisy_latent, cond_img], dim=1)
         x0 = self.input_proj(x)
@@ -266,7 +272,9 @@ class DualKGDiffusionModel(nn.Module):
         base_img, flows = self.prior_extractor(blur_img)
         cond_img = torch.cat([blur_img, base_img], dim=1)
         pred_noise = self.denoiser(noisy_latent, timestep, cond_img, flows)
-        flow_s1, flow_s2, flow_s3 = (list(flows) + [None, None, None])[:3]
+        flow_s1 = _flow_at(flows, 0)
+        flow_s2 = _flow_at(flows, 1)
+        flow_s3 = _flow_at(flows, 2)
         return {
             "pred_noise": pred_noise,
             "base_img": base_img,

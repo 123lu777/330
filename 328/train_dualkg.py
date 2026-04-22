@@ -52,17 +52,17 @@ def train_one_step(
     blur = batch["blur"].to(device)
     sharp = batch["sharp"].to(device)
 
-    timesteps = torch.randint(0, num_timesteps, (blur.size(0),), device=device)
+    sampled_timesteps = torch.randint(0, num_timesteps, (blur.size(0),), device=device)
     noise = torch.randn_like(sharp)
-    noisy_latent = q_sample(sharp, timesteps, alpha_bars, noise)
+    noisy_latent = q_sample(sharp, sampled_timesteps, alpha_bars, noise)
 
-    out = model(blur_img=blur, noisy_latent=noisy_latent, timestep=timesteps)
+    out = model(blur_img=blur, noisy_latent=noisy_latent, timestep=sampled_timesteps)
     pred_noise = out["pred_noise"]
     loss_noise = F.mse_loss(pred_noise, noise)
     loss_base = F.l1_loss(out["base_img"], sharp)
     loss = loss_noise + 0.1 * loss_base
 
-    optimizer.zero_grad(set_to_none=True)
+    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
@@ -82,6 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--num_workers", type=int, default=0)
     return parser.parse_args()
 
@@ -108,7 +109,7 @@ def main() -> None:
         drop_last=True,
     )
 
-    optimizer = optim.AdamW(model.denoiser.parameters(), lr=args.lr, weight_decay=1e-4)
+    optimizer = optim.AdamW(model.denoiser.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     _, alpha_bars = build_linear_beta_schedule(args.timesteps, device=device)
 
     model.train()
