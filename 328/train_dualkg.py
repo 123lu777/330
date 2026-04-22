@@ -1,6 +1,10 @@
 import argparse
+import os
+import random
 from typing import Dict, Tuple
 
+import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
@@ -9,18 +13,68 @@ from torch.utils.data import DataLoader, Dataset
 from models.dual_kg_diffusion import DualKGDiffusionModel
 
 
-class DummyDeblurDataset(Dataset):
-    def __init__(self, length: int = 64, image_size: int = 256) -> None:
-        self.length = length
+class RealDeblurDataset(Dataset):
+    def __init__(self, data_dir: str, meta_file: str, image_size: int = 256, is_train: bool = True) -> None:
+        super().__init__()
+        self.data_dir = data_dir
         self.image_size = image_size
+        self.is_train = is_train
+        self.samples = []
+
+        with open(meta_file, "r", encoding="utf-8") as f:
+            for line in f.readlines():
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    blur_path = parts[0] if os.path.isabs(parts[0]) else os.path.join(data_dir, parts[0])
+                    sharp_path = parts[1] if os.path.isabs(parts[1]) else os.path.join(data_dir, parts[1])
+                    self.samples.append((blur_path, sharp_path))
+
+        if not self.samples:
+            raise ValueError(f"No valid image pairs found in meta file: {meta_file}")
+
+        print(f"Successfully loaded {len(self.samples)} image pairs from {meta_file}")
 
     def __len__(self) -> int:
-        return self.length
+        return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        blur = torch.rand(3, self.image_size, self.image_size)
-        sharp = torch.rand(3, self.image_size, self.image_size)
-        return {"blur": blur, "sharp": sharp}
+        blur_path, sharp_path = self.samples[idx]
+
+        blur_img = cv2.imread(blur_path)
+        sharp_img = cv2.imread(sharp_path)
+
+        if blur_img is None or sharp_img is None:
+            return self.__getitem__(random.randint(0, len(self.samples) - 1))
+
+        blur_img = cv2.cvtColor(blur_img, cv2.COLOR_BGR2RGB)
+        sharp_img = cv2.cvtColor(sharp_img, cv2.COLOR_BGR2RGB)
+
+        h, w, _ = blur_img.shape
+
+        if self.is_train:
+            if h > self.image_size and w > self.image_size:
+                top = random.randint(0, h - self.image_size)
+                left = random.randint(0, w - self.image_size)
+                blur_img = blur_img[top : top + self.image_size, left : left + self.image_size, :]
+                sharp_img = sharp_img[top : top + self.image_size, left : left + self.image_size, :]
+            else:
+                blur_img = cv2.resize(blur_img, (self.image_size, self.image_size))
+                sharp_img = cv2.resize(sharp_img, (self.image_size, self.image_size))
+
+            if random.random() < 0.5:
+                blur_img = np.flip(blur_img, axis=1)
+                sharp_img = np.flip(sharp_img, axis=1)
+            if random.random() < 0.5:
+                blur_img = np.flip(blur_img, axis=0)
+                sharp_img = np.flip(sharp_img, axis=0)
+        else:
+            blur_img = cv2.resize(blur_img, (self.image_size, self.image_size))
+            sharp_img = cv2.resize(sharp_img, (self.image_size, self.image_size))
+
+        blur_tensor = torch.from_numpy(np.ascontiguousarray(blur_img)).permute(2, 0, 1).float() / 255.0
+        sharp_tensor = torch.from_numpy(np.ascontiguousarray(sharp_img)).permute(2, 0, 1).float() / 255.0
+
+        return {"blur": blur_tensor, "sharp": sharp_tensor}
 
 
 def normalize_to_neg_one_to_one(x: torch.Tensor) -> torch.Tensor:
@@ -94,6 +148,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kinematic_weights", type=str, required=True, help="Path to kinematic expert weights")
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--image_size", type=int, default=256)
+    parser.add_argument("--data_dir", type=str, required=True, help="Dataset root directory")
+    parser.add_argument("--meta_file", type=str, required=True, help="Txt file with blur/sharp pair paths")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -115,7 +171,12 @@ def main() -> None:
         device=device,
     ).to(device)
 
-    dataset = DummyDeblurDataset(length=64, image_size=args.image_size)
+    dataset = RealDeblurDataset(
+        data_dir=args.data_dir,
+        meta_file=args.meta_file,
+        image_size=args.image_size,
+        is_train=True,
+    )
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
