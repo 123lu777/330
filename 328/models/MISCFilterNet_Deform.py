@@ -69,7 +69,7 @@ class SCM_Deform(nn.Module):
         )
         self.conv = BasicConv(out_plane, out_plane, kernel_size=1, stride=1, relu=False)
 
-    def forward(self, x):
+    def forward(self, x, return_flows=False):
         x = torch.cat([x, self.main(x)], dim=1)
         return self.conv(x)
 
@@ -294,7 +294,7 @@ class MISCKernelNet_Deform(nn.Module):
             BasicConv(base_channel * 2, kernel_size ** 2, kernel_size=3, relu=False, stride=1),
         ])
 
-    def forward(self, x):
+    def forward(self, x, return_flows=False):
 
         x_2 = F.interpolate(x, scale_factor=0.5)
         x_4 = F.interpolate(x_2, scale_factor=0.5)
@@ -304,6 +304,7 @@ class MISCKernelNet_Deform(nn.Module):
 
         outputs_fil = list()
         outputs = list()
+        flow_priors = list()
         Kernal_Loss = 0
 
         x_ = self.feat_extract[0](x)
@@ -330,6 +331,7 @@ class MISCKernelNet_Deform(nn.Module):
         s3_kernal_flow = self.KernelPredictFlow[0](z)
         s3_kernal_flowmask = self.KernelPredictFlowMask[0](z)
         s3_kernal_flowmask = self.sigmoid(s3_kernal_flowmask)
+        flow_priors.append(s3_kernal_flow)
 
         zx4 = torch.cat([z, x_4], 1)
         s3_kernal_flowfeat0, x_4_0 = torch.split(flow_warp(zx4, s3_kernal_flow.permute(0, 2, 3, 1)), self.dim * 4,
@@ -376,6 +378,7 @@ class MISCKernelNet_Deform(nn.Module):
         s2_kernal_flow = self.KernelPredictFlow[1](z) + self.flowup(s3_kernal_flow) * 2
         s2_kernal_flowmask = self.KernelPredictFlowMask[1](z)
         s2_kernal_flowmask = self.sigmoid(s2_kernal_flowmask)
+        flow_priors.append(s2_kernal_flow)
 
         zx2 = torch.cat([z, x_2], 1)
         s2_kernal_flowfeat0, x_2_0 = torch.split(flow_warp(zx2, s2_kernal_flow.permute(0, 2, 3, 1)), self.dim * 2,
@@ -423,6 +426,7 @@ class MISCKernelNet_Deform(nn.Module):
         s1_kernal_flow = self.KernelPredictFlow[2](z) + self.flowup(s2_kernal_flow) * 2
         s1_kernal_flowmask = self.KernelPredictFlowMask[2](z)
         s1_kernal_flowmask = self.sigmoid(s1_kernal_flowmask)
+        flow_priors.append(s1_kernal_flow)
 
         zx = torch.cat([z, x], 1)
         s1_kernal_flowfeat0, x_0 = torch.split(flow_warp(zx, s1_kernal_flow.permute(0, 2, 3, 1)), self.dim, dim=1)
@@ -457,8 +461,12 @@ class MISCKernelNet_Deform(nn.Module):
             Kernal_Loss += loss_s1_Alpha
             Kernal_Loss += loss_s1_Beta
 
+            if return_flows:
+                return outputs[::-1], outputs_fil[::-1], flow_priors[::-1]
             return outputs[::-1], outputs_fil[::-1]
         else:
+            if return_flows:
+                return out, flow_priors[::-1]
             return out
 
 
